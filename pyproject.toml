@@ -1,0 +1,2 @@
+[tool.pylsp-mypy]
+enabled = false
