@@ -35,14 +35,12 @@ def loss_fn(model: nn.Module, x: mx.array, y: mx.array, reduce=True):
     return mx.mean(losses) if reduce else mx.mean(losses, axis=(-1, -2))
 
 
-def eval_fn(model: nn.Module, dataset: np.array, context_size: int, batch_size: int):
-    inputs, targets = map(mx.array, Data.to_samples(context_size, dataset))
+def eval_fn(model: nn.Module, inputs: mx.array, targets: mx.array, batch_size: int):
     loss = 0
     for s in range(0, targets.shape[0], batch_size):
         bx, by = inputs[s : s + batch_size], targets[s : s + batch_size]
-        bx, by = map(mx.array, (bx, by))
         losses = loss_fn(model, bx, by, reduce=False)
-        loss += mx.sum(losses).item()
+        loss += mx.sum(losses)
 
     return loss / (len(targets) // batch_size)
 
@@ -56,6 +54,7 @@ def main():
 
     model = BigramLanguageModel(len(tokenizer.vocabulary))
     context_size = 8
+    batch_size = 32
 
     idx = mx.zeros((1, 1), dtype=mx.uint32)
     gen = model.generate(idx, 100)[0].tolist()
@@ -74,19 +73,30 @@ def main():
         loss, grads = loss_and_grad_fn(model, inputs, targets)
         optimizer.update(model, grads)
 
-    validation_loss = eval_fn(model, validation_data, context_size, 32)
-    print(f"{validation_loss=}")
+    @partial(mx.compile, inputs=model.state)
+    def eval_full(inputs, targets):
+        return eval_fn(model, inputs, targets, batch_size=256)
+
+    validation_inputs, validation_targets = map(
+        mx.array, Data.to_samples(context_size, validation_data)
+    )
 
     tic = time.perf_counter()
-    train_iterator = Data.iterate_batches(32, context_size, train_data)
+    validation_loss = eval_full(validation_inputs, validation_targets)
+    print(f"{validation_loss=}")
+    toc = time.perf_counter()
+    print(f"Eval took: {(toc-tic):.3f}s")
+
+    # Main training loop
+    tic = time.perf_counter()
+    train_iterator = Data.iterate_batches(batch_size, context_size, train_data)
     for train_iter, (inputs, targets) in zip(range(10000), train_iterator):
         xb, yb = map(mx.array, (inputs, targets))
         step(xb, yb)
-
     toc = time.perf_counter()
     print(f"Optimization took: {(toc-tic):.3f}s")
 
-    validation_loss = eval_fn(model, validation_data, context_size, 32)
+    validation_loss = eval_full(validation_inputs, validation_targets)
     print(f"{validation_loss=}")
 
     print("\nFinal Sample:")
