@@ -138,7 +138,6 @@ class Llama(nn.Module):
         ]
         self.norm = nn.RMSNorm(dims)
         self.out_proj = nn.Linear(dims, vocab_size, bias=False)
-        print(f"{self.out_proj=}")
 
     def __call__(self, x):
         mask = nn.MultiHeadAttention.create_additive_causal_mask(x.shape[1])
@@ -219,11 +218,13 @@ def main():
     mx.random.seed(1)
     train_data, validation_data, tokenizer = Data.load_data()
     vocab_size = len(tokenizer.vocabulary)
-    context_size = 8
+    context_size = 128
     generate_length = 100
 
     # model = BigramLanguageModel(len(tokenizer.vocabulary))
-    model = Llama(2, vocab_size, context_size, 32, 4)
+    model = Llama(
+        num_layers=4, vocab_size=vocab_size, dims=64, mlp_dims=128, num_heads=4
+    )
 
     batch_size = 32
 
@@ -247,10 +248,11 @@ def main():
         loss_and_grad_fn = nn.value_and_grad(model, loss_fn)
         loss, grads = loss_and_grad_fn(model, inputs, targets)
         optimizer.update(model, grads)
+        return loss
 
     @partial(mx.compile, inputs=model.state)
     def eval_full(inputs, targets):
-        return eval_fn(model, inputs, targets, batch_size=256)
+        return eval_fn(model, inputs, targets, batch_size=4096)
 
     validation_inputs, validation_targets = map(
         mx.array, Data.to_samples(context_size, validation_data)
@@ -263,14 +265,16 @@ def main():
     print(f"Eval took: {(toc-tic):.3f}s")
 
     # Main training loop
+    train_losses = []
     tic = time.perf_counter()
     train_iterator = Data.iterate_batches(batch_size, context_size, train_data)
-    for train_iter, (inputs, targets) in zip(range(10000), train_iterator):
+    for train_iter, (inputs, targets) in zip(range(5000), train_iterator):
         xb, yb = map(mx.array, (inputs, targets))
-        step(xb, yb)
-        if train_iter % 1000 == 0:
-            validation_loss = eval_full(validation_inputs, validation_targets)
-            print(f"Iter {train_iter}, valid loss: {validation_loss}")
+        loss = step(xb, yb)
+        train_losses.append(loss.item())
+        if train_iter % 500 == 0:
+            train_loss = np.mean(train_losses)
+            print(f"Iter {train_iter}, train loss: {train_loss}")
 
     toc = time.perf_counter()
     print(f"Optimization took: {(toc-tic):.3f}s")
